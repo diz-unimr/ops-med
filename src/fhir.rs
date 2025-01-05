@@ -1,14 +1,21 @@
 use crate::config::AppConfig;
-use fhir_sdk::r4b::resources::{Bundle, Medication, MedicationAdministration, Procedure};
-use fhir_sdk::r4b::types::{CodeableConcept, Coding, Identifier, IdentifierBuilder, Meta};
+use fhir_sdk::r4b::codes::IdentifierUse;
+use fhir_sdk::r4b::resources::{
+    Bundle, Medication, MedicationAdministration, MedicationAdministrationDosage,
+    MedicationAdministrationEffective, Procedure, ProcedurePerformed,
+};
+use fhir_sdk::r4b::types::{
+    CodeableConcept, Coding, Identifier, IdentifierBuilder, Meta, Quantity, Range, Reference,
+    ReferenceBuilder,
+};
+use fhir_sdk::BuilderError;
+use futures::StreamExt;
 use log::debug;
-
 use serde_derive::Deserialize;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::ops::{Deref, DerefMut};
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -21,7 +28,7 @@ impl Mapper {
         // deserialize
         let b: Bundle = serde_json::from_str(bundle.as_str())?;
 
-        // get procedures
+        // map Procedure to MedicationAdministration / Medication
         let ops_med: Vec<Medication> = self
             .get_procedures(b)
             .iter()
@@ -53,21 +60,12 @@ impl Mapper {
     ) -> Result<Medication, Box<dyn std::error::Error>> {
         let Some(record): Option<&Record> =
             self.get_med_mapping(procedure.code.clone().ok_or("procedure code missing")?)
-        // .next()
-
-        // .clone()
-        // .ok_or("procedure code missing")?
-        // .coding
-        // .iter()
-        // .flatten()
-        // .filter_map(get_med_mapping)
-        // .next()
         else {
             return Err("No code found for procedure".into());
         };
 
         // create MedicationAdministration
-        create_medication_administration(procedure, record);
+        let _ = create_medication_administration(procedure, record);
 
         // TODO
         let med_builder = Medication::builder().code(
@@ -108,22 +106,92 @@ fn create_medication_administration(
     record: &Record,
 ) -> Result<MedicationAdministration, Box<dyn Error>> {
     MedicationAdministration::builder()
+        // set required properties
         .meta(
             build_meta("https://www.medizininformatik-invecitiative.de/fhir/core/modul-medikation/StructureDefinition/MedicationAdministration",
-                         procedure))
-        // TODO
+                       procedure))
         .identifier(vec![Some(Identifier::builder()
             .system("foo".to_string())
             .value("bar".to_string()).build().unwrap())])
         .status(procedure.status.to_string())
         .subject(procedure.subject.clone())
-        // .context(procedure.encounter.unwrap())
+        .part_of(vec![Some(procedure_ref(procedure.identifier.clone()).ok_or_else(||"failed to build procedure reference from identifier")?)])
+        .effective(build_effective(procedure.performed.clone().ok_or("procedure.perfomed is empty")?)?)
+        .dosage(build_dosage(record)?)
         .build()
+        // optional properties
+        .map(|mut admin| {
+            // set encounter
+            admin.context = procedure.encounter.clone();
+            admin
+        })
         .map_err(|e| e.into())
-    // med_admin.meta.unwrap().source=procedure.meta.as_ref().and_then(|m|m.source.clone())
+}
 
-    // if procedure.meta.as_ref().and_then(|m|m.source.clone()))
-    // med_admin
+fn build_dosage(record: &Record) -> Result<MedicationAdministrationDosage, BuilderError> {
+    MedicationAdministrationDosage::builder()
+        .text(record.text.clone())
+        // TODO SimpleQuantity instead of Range in Administration vs Statement
+        // .dose(build_dose(record)?)
+        // TODO SNOMED mapping
+        // .site(...)
+        .route(
+            CodeableConcept::builder()
+                .coding(vec![Some(
+                    Coding::builder()
+                        .system("http://standardterms.edqm.eu".to_string())
+                        .code(record.route_code.to_string())
+                        .display(record.route_name.to_string())
+                        .build()?,
+                )])
+                .build()?,
+        )
+        .method(
+            CodeableConcept::builder()
+                .coding(vec![Some(
+                    Coding::builder()
+                        .system("http://standardterms.edqm.eu".to_string())
+                        .code(record.method_code.to_string())
+                        .display(record.method_name.to_string())
+                        .build()?,
+                )])
+                .build()?,
+        )
+        .build()
+}
+
+fn build_effective(
+    performed: ProcedurePerformed,
+) -> Result<MedicationAdministrationEffective, Box<dyn Error>> {
+    match performed {
+        ProcedurePerformed::DateTime(dt) => Ok(MedicationAdministrationEffective::DateTime(dt)),
+        ProcedurePerformed::Period(p) => Ok(MedicationAdministrationEffective::Period(p)),
+        _ => Err("Procedure.performed must be DateTime or Period".into()),
+    }
+}
+
+fn procedure_ref(identifiers: Vec<Option<Identifier>>) -> Option<Reference> {
+    identifiers
+        .iter()
+        .flatten()
+        .filter_map(|i| {
+            // TODO configure which identifier to use
+            if i.r#use? == IdentifierUse::Usual {
+                Some(
+                    Reference::builder()
+                        .reference(format!(
+                            "identifier={}|{}",
+                            i.system.clone()?,
+                            i.value.clone()?
+                        ))
+                        .build()
+                        .unwrap(),
+                )
+            } else {
+                None
+            }
+        })
+        .next()
 }
 
 fn build_meta(profile: &str, procedure: &Procedure) -> Meta {
@@ -140,10 +208,20 @@ fn build_meta(profile: &str, procedure: &Procedure) -> Meta {
 pub(crate) struct Record {
     #[serde(rename = "OPS-code")]
     ops_code: String,
+    #[serde(rename = "Text")]
+    text: String,
     #[serde(rename = "Substanzangabe_aus_OPS-Code")]
     substanzangabe_aus_ops_code: String,
     #[serde(rename = "ATC-Code")]
     atc_code: String,
+    #[serde(rename = "Routes and Methods of Administration - Concept Code")]
+    route_code: String,
+    #[serde(rename = "Routes and Methods of Administration - Term")]
+    route_name: String,
+    #[serde(rename = "Administration Method - ID")]
+    method_code: String,
+    #[serde(rename = "Administration Method - Name")]
+    method_name: String,
     // substanz_genau_unii_number: String,
     // substanz_genau_ask_nr: String,
     // substanz_genau_cas_nummer: String,
