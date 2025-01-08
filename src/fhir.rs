@@ -1,26 +1,31 @@
 use crate::config::AppConfig;
-use fhir_sdk::r4b::codes::IdentifierUse;
+use fhir_sdk::r4b::codes::{BundleType, HTTPVerb, IdentifierUse};
+use fhir_sdk::r4b::resources;
 use fhir_sdk::r4b::resources::{
-    Bundle, Medication, MedicationAdministration, MedicationAdministrationDosage,
-    MedicationAdministrationEffective, Procedure, ProcedurePerformed,
+    BaseResource, Bundle, BundleEntry, BundleEntryRequest, DomainResource, IdentifiableResource,
+    Medication, MedicationAdministration, MedicationAdministrationDosage,
+    MedicationAdministrationEffective, MedicationAdministrationMedication, MedicationIngredient,
+    NamedResource, Procedure, ProcedurePerformed, Resource, ResourceType,
 };
-use fhir_sdk::r4b::types::{
-    CodeableConcept, Coding, Identifier, IdentifierBuilder, Meta, Quantity, Range, Reference,
-    ReferenceBuilder,
-};
+use fhir_sdk::r4b::types::{CodeableConcept, Coding, Identifier, Meta, Quantity, Range, Reference};
 use fhir_sdk::BuilderError;
-use futures::StreamExt;
 use log::debug;
+use serde::de::DeserializeOwned;
 use serde_derive::Deserialize;
+use std::any::Any;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::path::Path;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::iter::once;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Mapper {
-    pub(crate) med_mapping: HashMap<String, Record>,
+    pub(crate) ops_mapping: HashMap<String, OpsMedication>,
+    pub(crate) med_mapping: HashMap<String, OpsMedicationIngredient>,
 }
 
 impl Mapper {
@@ -29,16 +34,23 @@ impl Mapper {
         let b: Bundle = serde_json::from_str(bundle.as_str())?;
 
         // map Procedure to MedicationAdministration / Medication
-        let ops_med: Vec<Medication> = self
+        let ops_med: Vec<Option<BundleEntry>> = self
             .get_procedures(b)
             .iter()
             .map(|p| self.map_medication(p))
             .flatten()
+            .flat_map(|res| once(bundle_entry(res.0)).chain(once(bundle_entry(res.1))))
+            .map(Some)
             .collect();
 
         debug!("{:#?}", ops_med);
+        let result = Bundle::builder()
+            .r#type(BundleType::Transaction)
+            .entry(ops_med)
+            .build()?;
 
-        // TODO serialize
+        // serialize
+        let bundle = serde_json::to_string(&result).expect("failed to serialize output bundle");
 
         Ok(bundle)
     }
@@ -57,34 +69,52 @@ impl Mapper {
     fn map_medication(
         &self,
         procedure: &Procedure,
-    ) -> Result<Medication, Box<dyn std::error::Error>> {
-        let Some(record): Option<&Record> =
+    ) -> Result<(Medication, MedicationAdministration), Box<dyn std::error::Error>> {
+        let Some(record): Option<&OpsMedication> =
             self.get_med_mapping(procedure.code.clone().ok_or("procedure code missing")?)
         else {
             return Err("No code found for procedure".into());
         };
 
-        // create MedicationAdministration
-        let _ = create_medication_administration(procedure, record);
+        // build medication
+        let medication_id = build_hash(record.substanzangabe_aus_ops_code.to_owned());
+        let medication = Medication::builder()
+            .id(medication_id.clone())
+            .meta(
+                build_meta("https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/Medication",
+                           procedure))
+            .identifier(vec![Some(Identifier::builder()
+                .system("https://fhir.diz.uni-marburg.de/sid/medication-id".to_owned())
+                .value(medication_id.clone()).build().unwrap())])
+            .code(
+                CodeableConcept::builder()
+                    .coding(vec![Some(
+                        Coding::builder()
+                            .system("http://fhir.de/CodeSystem/bfarm/atc".to_owned())
+                            .code(record.atc_code.clone())
+                            .version("ATC/DDD Version 2020".to_owned())
+                            .build()
+                            .unwrap(),
+                    )])
+                    .build()
+                    .unwrap(),
+            )
+            .status("active".to_owned())
+            // TODO set ingredient
+            .ingredient(self.build_ingredient(record.atc_code.clone()))
+            .build()?;
 
-        // TODO
-        let med_builder = Medication::builder().code(
-            CodeableConcept::builder()
-                .coding(vec![Some(
-                    Coding::builder()
-                        .system("http://fhir.de/CodeSystem/bfarm/atc".to_owned())
-                        .code(record.clone().atc_code)
-                        .version("ATC/DDD Version 2020".to_owned())
-                        .build()
-                        .unwrap(),
-                )])
-                .build()
-                .unwrap(),
-        );
-        med_builder.build().map_err(|e| e.into())
+        // create MedicationAdministration
+        let med_admin = build_medication_administration(
+            procedure,
+            record,
+            medication.id.clone().expect("medication missing id"),
+        )?;
+
+        Ok((medication, med_admin))
     }
 
-    fn get_med_mapping(&self, codes: CodeableConcept) -> Option<&Record> {
+    fn get_med_mapping(&self, codes: CodeableConcept) -> Option<&OpsMedication> {
         codes
             .coding
             .iter()
@@ -96,52 +126,127 @@ impl Mapper {
                     None
                 }
             })
-            .filter_map(|ops_code| self.med_mapping.get::<str>(ops_code.as_ref()))
+            .filter_map(|ops_code| self.ops_mapping.get::<str>(ops_code.as_ref()))
             .next()
+    }
+
+    fn build_ingredient(&self, atc_code: String) -> Vec<Option<MedicationIngredient>> {
+        // TODO
+        // medication.setIngredient(List.of(new MedicationIngredientComponent().setItem(new CodeableConcept()
+        //     .addCoding(new Coding()
+        //         .setCode(medikament.getSubstanzGenauUniiNumber())
+        //         .setSystem("http://fdasis.nlm.nih.gov"))
+        //     .addCoding(new Coding()
+        //         .setCode(medikament.getSubstanzGenauAskNr())
+        //         .setSystem("http://fhir.de/CodeSystem/ask"))
+        //     .addCoding(new Coding()
+        //         .setCode(medikament.getSubstanzGenauCasNummer())
+        //         .setSystem("urn:oid:2.16.840.1.113883.6.61")))));
+
+        todo!()
+        // self.med_mapping.
     }
 }
 
-fn create_medication_administration(
+fn build_hash(input: String) -> String {
+    let mut s = DefaultHasher::new();
+    input.hash(&mut s);
+    s.finish().to_string()
+}
+
+fn bundle_entry<T: IdentifiableResource + Clone>(resource: T) -> BundleEntry
+where
+    Resource: From<T>,
+{
+    // resource type
+    let resource_type = Resource::from(resource.clone()).resource_type();
+
+    // identifier
+    let identifier = resource
+        .identifier()
+        .iter()
+        .flatten()
+        .filter(|&id| id.r#use.is_some_and(|u| u == IdentifierUse::Usual))
+        .next()
+        .expect("missing identifier with use: 'usual'");
+
+    BundleEntry::builder()
+        .resource(resource.clone().into())
+        .request(
+            BundleEntryRequest::builder()
+                .method(HTTPVerb::Put)
+                .url(conditional_reference(
+                    resource_type,
+                    identifier
+                        .system
+                        .clone()
+                        .expect("identifier.system missing")
+                        .to_owned(),
+                    identifier
+                        .value
+                        .clone()
+                        .expect("identifier.value missing")
+                        .to_owned(),
+                ))
+                .build()
+                .expect("failed to build BundeEntryRequest"),
+        )
+        .build()
+        .expect("failed to build Bundle entry")
+}
+
+fn build_medication_administration(
     procedure: &Procedure,
-    record: &Record,
+    record: &OpsMedication,
+    medication_id: String,
 ) -> Result<MedicationAdministration, Box<dyn Error>> {
+    let procedure_id = procedure.id.clone().expect("missing procedure id");
     MedicationAdministration::builder()
         // set required properties
+        .id(procedure_id.clone())
         .meta(
             build_meta("https://www.medizininformatik-invecitiative.de/fhir/core/modul-medikation/StructureDefinition/MedicationAdministration",
                        procedure))
         .identifier(vec![Some(Identifier::builder()
-            .system("foo".to_string())
-            .value("bar".to_string()).build().unwrap())])
+            .system("https://fhir.diz.uni-marburg.de/sid/medication-administration-id".to_owned())
+            .value(procedure_id.clone()).build().unwrap())])
         .status(procedure.status.to_string())
         .subject(procedure.subject.clone())
-        .part_of(vec![Some(procedure_ref(procedure.identifier.clone()).ok_or_else(||"failed to build procedure reference from identifier")?)])
+        .part_of(vec![Some(procedure_ref(procedure.identifier.clone()).ok_or("failed to build procedure reference from identifier")?)])
         .effective(build_effective(procedure.performed.clone().ok_or("procedure.perfomed is empty")?)?)
         .dosage(build_dosage(record)?)
+        .medication(MedicationAdministrationMedication::Reference(Reference::builder().reference(
+            conditional_reference(
+                ResourceType::Medication,"https://diz.uni-marburg.de/fhir/sid/medication-administration-id".to_owned(),
+                medication_id)
+        ).build()?))
         .build()
-        // optional properties
         .map(|mut admin| {
-            // set encounter
+            // need to be able to set Option for context (encounter)
             admin.context = procedure.encounter.clone();
             admin
         })
         .map_err(|e| e.into())
 }
 
-fn build_dosage(record: &Record) -> Result<MedicationAdministrationDosage, BuilderError> {
+fn conditional_reference(resource_type: ResourceType, system: String, value: String) -> String {
+    format!("{resource_type}?identifier={system}|{value}")
+}
+
+fn build_dosage(record: &OpsMedication) -> Result<MedicationAdministrationDosage, BuilderError> {
     MedicationAdministrationDosage::builder()
         .text(record.text.clone())
-        // TODO SimpleQuantity instead of Range in Administration vs Statement
+        // TODO exact dose is unknown as OPS codes represent a range
         // .dose(build_dose(record)?)
-        // TODO SNOMED mapping
+        // TODO needs SNOMED mapping
         // .site(...)
         .route(
             CodeableConcept::builder()
                 .coding(vec![Some(
                     Coding::builder()
-                        .system("http://standardterms.edqm.eu".to_string())
-                        .code(record.route_code.to_string())
-                        .display(record.route_name.to_string())
+                        .system("http://standardterms.edqm.eu".to_owned())
+                        .code(record.route_code.to_owned())
+                        .display(record.route_name.to_owned())
                         .build()?,
                 )])
                 .build()?,
@@ -150,9 +255,9 @@ fn build_dosage(record: &Record) -> Result<MedicationAdministrationDosage, Build
             CodeableConcept::builder()
                 .coding(vec![Some(
                     Coding::builder()
-                        .system("http://standardterms.edqm.eu".to_string())
-                        .code(record.method_code.to_string())
-                        .display(record.method_name.to_string())
+                        .system("http://standardterms.edqm.eu".to_owned())
+                        .code(record.method_code.to_owned())
+                        .display(record.method_name.to_owned())
                         .build()?,
                 )])
                 .build()?,
@@ -175,7 +280,7 @@ fn procedure_ref(identifiers: Vec<Option<Identifier>>) -> Option<Reference> {
         .iter()
         .flatten()
         .filter_map(|i| {
-            // TODO configure which identifier to use
+            // use USUAL identifier for now
             if i.r#use? == IdentifierUse::Usual {
                 Some(
                     Reference::builder()
@@ -195,7 +300,7 @@ fn procedure_ref(identifiers: Vec<Option<Identifier>>) -> Option<Reference> {
 }
 
 fn build_meta(profile: &str, procedure: &Procedure) -> Meta {
-    let builder = Meta::builder().profile(vec![Some(profile.to_string())]);
+    let builder = Meta::builder().profile(vec![Some(profile.to_owned())]);
     let builder = match procedure.meta.as_ref().and_then(|m| m.source.clone()) {
         Some(source) => builder.source(source),
         None => builder,
@@ -205,7 +310,7 @@ fn build_meta(profile: &str, procedure: &Procedure) -> Meta {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub(crate) struct Record {
+pub(crate) struct OpsMedication {
     #[serde(rename = "OPS-code")]
     ops_code: String,
     #[serde(rename = "Text")]
@@ -222,37 +327,50 @@ pub(crate) struct Record {
     method_code: String,
     #[serde(rename = "Administration Method - Name")]
     method_name: String,
-    // substanz_genau_unii_number: String,
-    // substanz_genau_ask_nr: String,
-    // substanz_genau_cas_nummer: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct OpsMedicationIngredient {
+    #[serde(rename = "ATC-Code")]
+    atc_code: String,
+    #[serde(rename = "Substanz_genau_UNII-number")]
+    substanz_genau_unii_number: String,
+    #[serde(rename = "Substanz_genau_ASK-Nr")]
+    substanz_genau_ask_nr: String,
+    #[serde(rename = "Substanz_genau_CAS-Nummer")]
+    substanz_genau_cas_nummer: String,
 }
 
 impl Mapper {
     pub(crate) fn new(config: AppConfig) -> Result<Self, Box<dyn std::error::Error>> {
         // get resource dir
-        let mut path = env::current_dir()?;
-        path.push("resources");
-        path.push("alleOPS_ab2008_Mapping.csv");
+        let mut base_dir = env::current_dir()?.join("resources");
+        // base_dir.push("resources");
+        // base_dir.push("alleOPS_ab2008_Mapping.csv");
 
-        let ops_mapping = Mapper::read_csv(path)?;
+        let ops_med_path = base_dir.join("alleOPS_ab2008_Mapping.csv");
+        let med_path = base_dir.join("alleSubstanzenMapping.csv");
+
+        let ops_mapping = Mapper::read_csv::<OpsMedication>(ops_med_path, |o| o.ops_code)?;
+        let med_mapping = Mapper::read_csv::<OpsMedicationIngredient>(med_path, |m| m.atc_code)?;
 
         Ok(Mapper {
-            med_mapping: ops_mapping,
+            ops_mapping,
+            med_mapping,
         })
     }
 
-    pub(crate) fn read_csv<P: AsRef<Path>>(
-        filename: P,
-    ) -> Result<HashMap<String, Record>, Box<dyn std::error::Error>> {
+    pub(crate) fn read_csv<T: DeserializeOwned + Clone>(
+        filename: PathBuf,
+        selector: fn(T) -> String,
+    ) -> Result<HashMap<String, T>, Box<dyn std::error::Error>> {
         let file = File::open(filename)?;
         let mut reader = csv::ReaderBuilder::new().delimiter(b';').from_reader(file);
         let mut map = HashMap::new();
 
         for result in reader.deserialize() {
-            let record: Record = result?;
-            map.insert(record.ops_code.to_string(), record);
-            // Try this if you don't like each record smushed on one line:
-            // println!("{:#?}", record);
+            let record: T = result?;
+            map.insert(selector(record.clone()).to_owned(), record);
         }
 
         Ok(map)

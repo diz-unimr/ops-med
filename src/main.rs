@@ -11,7 +11,7 @@ use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::{BorrowedMessage, Headers, Message};
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::{producer, ClientConfig};
+use rdkafka::ClientConfig;
 use std::env;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -216,7 +216,7 @@ mod tests {
             .await
             .unwrap();
 
-        // setup config
+        // setup configsubstanzangabe_aus_ops_code
         let mut config = AppConfig::default();
         config.kafka.brokers = mock_cluster.bootstrap_servers();
         config.kafka.offset_reset = String::from("earliest");
