@@ -1,26 +1,22 @@
 use crate::config::AppConfig;
 use fhir_sdk::r4b::codes::{BundleType, HTTPVerb, IdentifierUse};
-use fhir_sdk::r4b::resources;
 use fhir_sdk::r4b::resources::{
     BaseResource, Bundle, BundleEntry, BundleEntryRequest, DomainResource, IdentifiableResource,
     Medication, MedicationAdministration, MedicationAdministrationDosage,
-    MedicationAdministrationEffective, MedicationAdministrationMedication, MedicationIngredient,
-    NamedResource, Procedure, ProcedurePerformed, Resource, ResourceType,
+    MedicationAdministrationEffective, MedicationAdministrationMedication, MedicationIngredient, Procedure, ProcedurePerformed, Resource, ResourceType,
 };
-use fhir_sdk::r4b::types::{CodeableConcept, Coding, Identifier, Meta, Quantity, Range, Reference};
+use fhir_sdk::r4b::types::{CodeableConcept, Coding, Identifier, Meta, Reference};
 use fhir_sdk::BuilderError;
 use log::debug;
 use serde::de::DeserializeOwned;
 use serde_derive::Deserialize;
-use std::any::Any;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::iter::once;
-use std::ops::Deref;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Mapper {
@@ -344,7 +340,7 @@ pub(crate) struct OpsMedicationIngredient {
 impl Mapper {
     pub(crate) fn new(config: AppConfig) -> Result<Self, Box<dyn std::error::Error>> {
         // get resource dir
-        let mut base_dir = env::current_dir()?.join("resources");
+        let base_dir = env::current_dir()?.join("resources");
         // base_dir.push("resources");
         // base_dir.push("alleOPS_ab2008_Mapping.csv");
 
