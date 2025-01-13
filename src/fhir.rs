@@ -8,13 +8,14 @@ use fhir_sdk::r4b::resources::{
 };
 use fhir_sdk::r4b::types::{CodeableConcept, Coding, Identifier, Meta, Reference};
 use fhir_sdk::BuilderError;
+use highway::{HighwayHash, HighwayHasher};
 use serde::de::DeserializeOwned;
 use serde_derive::Deserialize;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hasher;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -185,9 +186,8 @@ fn to_bundle_entry(
 }
 
 fn build_hash(input: String) -> String {
-    let mut s = DefaultHasher::new();
-    input.hash(&mut s);
-    s.finish().to_string()
+    let hasher = HighwayHasher::default();
+    hasher.hash64(input.as_bytes()).to_string()
 }
 
 fn bundle_entry<T: IdentifiableResource + Clone>(resource: T) -> Result<BundleEntry, Box<dyn Error>>

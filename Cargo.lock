@@ -594,6 +594,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "highway"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9040319a6910b901d5d49cbada4a99db52836a1b63228a05f7e2b7f8feef89b1"
+
+[[package]]
 name = "humantime"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -777,6 +783,7 @@ dependencies = [
  "env_logger",
  "fhir-sdk",
  "futures",
+ "highway",
  "log",
  "rdkafka",
  "serde",
