@@ -13,6 +13,7 @@ use rdkafka::message::{BorrowedMessage, Headers, Message};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
 use std::env;
+use std::error::Error;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,7 +32,7 @@ async fn run(config: Kafka, topic: String, mapper: Mapper) {
 
     let stream = consumer
         .stream()
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        .map_err(|e| Box::new(e) as Box<dyn Error>)
         .try_for_each(|m| {
             let consumer = consumer.clone();
             let producer = producer.clone();
@@ -64,7 +65,9 @@ async fn run(config: Kafka, topic: String, mapper: Mapper) {
 
                     // mapper
                     // TODO handle error
-                    let result = mapper.map(payload.unwrap()).unwrap();
+                    let Some(result) = mapper.map(payload.unwrap())
+                        .map_err(|e| error!("Failed to map payload [key={key}]: {}",e))
+                        .unwrap() else { return Ok(()); };
 
                     // send to output topic
                     let produce_future = producer.send(
@@ -75,7 +78,7 @@ async fn run(config: Kafka, topic: String, mapper: Mapper) {
                     );
                     match produce_future.await {
                         Ok(delivery) => {
-                            debug!("Message sent: {:?}", delivery);
+                            debug!("Message sent: key: {key}, partition: {}, offset: {}", delivery.0,delivery.1);
                             // store offset
                             consumer
                                 .store_offset_from_message(&m)
