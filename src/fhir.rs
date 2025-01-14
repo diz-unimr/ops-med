@@ -1,4 +1,4 @@
-use crate::config::AppConfig;
+use crate::config::{AppConfig, Fhir};
 use fhir_sdk::r4b::codes::{BundleType, HTTPVerb, IdentifierUse};
 use fhir_sdk::r4b::resources::{
     Bundle, BundleEntry, BundleEntryRequest, IdentifiableResource, Medication,
@@ -8,18 +8,17 @@ use fhir_sdk::r4b::resources::{
 };
 use fhir_sdk::r4b::types::{CodeableConcept, Coding, Identifier, Meta, Reference};
 use fhir_sdk::BuilderError;
-use highway::{HighwayHash, HighwayHasher};
 use serde::de::DeserializeOwned;
 use serde_derive::Deserialize;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::hash::Hasher;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Mapper {
+    pub(crate) config: Fhir,
     pub(crate) ops_mapping: HashMap<String, OpsMedication>,
     pub(crate) med_mapping: HashMap<String, OpsMedicationIngredient>,
 }
@@ -67,22 +66,85 @@ impl Mapper {
             .collect()
     }
 
+    fn build_medication_administration(
+        &self,
+        procedure: &Procedure,
+        record: &OpsMedication,
+        medication_id: String,
+    ) -> Result<MedicationAdministration, Box<dyn Error>> {
+        let procedure_id = default_identifier(procedure.identifier.clone())
+            .ok_or("no default identifier")?
+            .value
+            .clone()
+            .ok_or("missing value for default identifier")?;
+        MedicationAdministration::builder()
+            // set required properties
+            .id(procedure_id.clone())
+            .meta(build_meta(
+                self.config.medication_administration.profile.to_owned(),
+                procedure,
+            ))
+            .identifier(vec![Some(
+                Identifier::builder()
+                    .r#use(IdentifierUse::Usual)
+                    .system(self.config.medication_administration.system.to_owned())
+                    .value(procedure_id.clone())
+                    .build()
+                    .unwrap(),
+            )])
+            .status(procedure.status.to_string())
+            .subject(procedure.subject.clone())
+            .part_of(vec![Some(
+                procedure_ref(procedure.identifier.clone())
+                    .ok_or("failed to build procedure reference from identifier")?,
+            )])
+            .effective(build_effective(
+                procedure
+                    .performed
+                    .clone()
+                    .ok_or("procedure.perfomed is empty")?,
+            )?)
+            .dosage(build_dosage(record)?)
+            .medication(MedicationAdministrationMedication::Reference(
+                Reference::builder()
+                    .reference(conditional_reference(
+                        ResourceType::Medication,
+                        self.config.medication.system.to_owned(),
+                        medication_id,
+                    ))
+                    .display(record.substanzangabe_aus_ops_code.to_owned())
+                    .build()?,
+            ))
+            .build()
+            .map(|mut admin| {
+                // need to be able to set Option for context (encounter)
+                admin.context = procedure.encounter.clone();
+                admin
+            })
+            .map_err(|e| e.into())
+    }
+
     fn map_medication(
         &self,
         procedure: &Procedure,
         ops_med: &OpsMedication,
     ) -> Result<(Medication, MedicationAdministration), Box<dyn Error>> {
         // build medication
-        let medication_id = build_hash(ops_med.substanzangabe_aus_ops_code.to_owned());
+        let medication_id = build_legacy_id(ops_med.substanzangabe_aus_ops_code.to_owned());
         let medication = Medication::builder()
             .id(medication_id.clone())
-            .meta(
-                build_meta("https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/Medication",
-                           procedure))
-            .identifier(vec![Some(Identifier::builder()
-                .r#use(IdentifierUse::Usual)
-                .system("https://fhir.diz.uni-marburg.de/sid/medication-id".to_owned())
-                .value(medication_id.clone()).build().unwrap())])
+            .meta(build_meta(
+                self.config.medication.profile.to_owned(),
+                procedure,
+            ))
+            .identifier(vec![Some(
+                Identifier::builder()
+                    .r#use(IdentifierUse::Usual)
+                    .system(self.config.medication.system.to_owned())
+                    .value(medication_id.clone())
+                    .build()
+                    .unwrap(),
+            )])
             .code(
                 CodeableConcept::builder()
                     .coding(vec![Some(
@@ -97,12 +159,17 @@ impl Mapper {
                     .unwrap(),
             )
             .status("active".to_owned())
-            .ingredient(self.build_ingredient(self.med_mapping.get::<str>(ops_med.atc_code.as_ref())
-                .ok_or("failed to find mapping for Medication.ingredient".to_owned())?))
+            .ingredient(
+                self.build_ingredient(
+                    self.med_mapping
+                        .get::<str>(ops_med.atc_code.as_ref())
+                        .ok_or("failed to find mapping for Medication.ingredient".to_owned())?,
+                ),
+            )
             .build()?;
 
         // create MedicationAdministration
-        let med_admin = build_medication_administration(
+        let med_admin = self.build_medication_administration(
             procedure,
             ops_med,
             medication.id.clone().expect("medication missing id"),
@@ -185,9 +252,10 @@ fn to_bundle_entry(
     }
 }
 
-fn build_hash(input: String) -> String {
-    let hasher = HighwayHasher::default();
-    hasher.hash64(input.as_bytes()).to_string()
+fn build_legacy_id(input: String) -> String {
+    let hash = farmhash::fingerprint64(input.as_bytes());
+    // convert to big endian and hex
+    format!("id-{:x}", hash.to_be())
 }
 
 fn bundle_entry<T: IdentifiableResource + Clone>(resource: T) -> Result<BundleEntry, Box<dyn Error>>
@@ -230,45 +298,6 @@ where
         .build()
         .map_err(|e| e.into())
         .into()
-}
-
-fn build_medication_administration(
-    procedure: &Procedure,
-    record: &OpsMedication,
-    medication_id: String,
-) -> Result<MedicationAdministration, Box<dyn Error>> {
-    let procedure_id = default_identifier(procedure.identifier.clone())
-        .ok_or("no default identifier")?
-        .value
-        .clone()
-        .ok_or("missing value for default identifier")?;
-    MedicationAdministration::builder()
-        // set required properties
-        .id(procedure_id.clone())
-        .meta(
-            build_meta("https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/MedicationAdministration",
-                       procedure))
-        .identifier(vec![Some(Identifier::builder()
-            .r#use(IdentifierUse::Usual)
-            .system("https://fhir.diz.uni-marburg.de/sid/medication-administration-id".to_owned())
-            .value(procedure_id.clone()).build().unwrap())])
-        .status(procedure.status.to_string())
-        .subject(procedure.subject.clone())
-        .part_of(vec![Some(procedure_ref(procedure.identifier.clone()).ok_or("failed to build procedure reference from identifier")?)])
-        .effective(build_effective(procedure.performed.clone().ok_or("procedure.perfomed is empty")?)?)
-        .dosage(build_dosage(record)?)
-        .medication(MedicationAdministrationMedication::Reference(Reference::builder()
-            .reference(conditional_reference(
-                ResourceType::Medication,"https://diz.uni-marburg.de/fhir/sid/medication-administration-id".to_owned(),
-                medication_id))
-            .display(record.substanzangabe_aus_ops_code.to_owned()).build()?))
-        .build()
-        .map(|mut admin| {
-            // need to be able to set Option for context (encounter)
-            admin.context = procedure.encounter.clone();
-            admin
-        })
-        .map_err(|e| e.into())
 }
 
 fn conditional_reference(resource_type: ResourceType, system: String, value: String) -> String {
@@ -348,8 +377,8 @@ fn default_identifier(identifiers: Vec<Option<Identifier>>) -> Option<Identifier
     }
 }
 
-fn build_meta(profile: &str, procedure: &Procedure) -> Meta {
-    let builder = Meta::builder().profile(vec![Some(profile.to_owned())]);
+fn build_meta(profile: String, procedure: &Procedure) -> Meta {
+    let builder = Meta::builder().profile(vec![Some(profile)]);
     let builder = match procedure.meta.as_ref().and_then(|m| m.source.clone()) {
         Some(source) => builder.source(source),
         None => builder,
@@ -402,6 +431,7 @@ impl Mapper {
         let med_mapping = Mapper::read_csv::<OpsMedicationIngredient>(med_path, |m| m.atc_code)?;
 
         Ok(Mapper {
+            config: config.fhir,
             ops_mapping,
             med_mapping,
         })
@@ -421,5 +451,16 @@ impl Mapper {
         }
 
         Ok(map)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::fhir::build_legacy_id;
+
+    #[test]
+    fn test_hash() {
+        let hash = build_legacy_id("Filgrastim".to_string());
+        assert_eq!(hash, "id-23eebc8a034c196d");
     }
 }

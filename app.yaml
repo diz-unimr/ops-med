@@ -15,14 +15,9 @@ kafka:
   offset_reset: earliest
 
 fhir:
-  server:
-    base_url: http://localhost:8080/fhir
-    auth:
-      basic:
-        user:
-        password:
-  retry:
-    count: 10
-    timeout: 10
-    wait: 5
-    max_wait: 20
+  medication:
+    profile: https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/Medication
+    system: https://miracum.org/fhir/NamingSystem/identifier/P21SurrogateMedicationId
+  medication_administration:
+    profile: https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/MedicationAdministration
+    system: https://fhir.diz.uni-marburg.de/sid/medication-administration-id

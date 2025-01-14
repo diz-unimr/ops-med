@@ -18,6 +18,18 @@ pub(crate) struct Kafka {
 }
 
 #[derive(Default, Debug, Deserialize, Clone)]
+pub(crate) struct Fhir {
+    pub(crate) medication: ResourceConfig,
+    pub(crate) medication_administration: ResourceConfig,
+}
+
+#[derive(Default, Debug, Deserialize, Clone)]
+pub(crate) struct ResourceConfig {
+    pub(crate) profile: String,
+    pub(crate) system: String,
+}
+
+#[derive(Default, Debug, Deserialize, Clone)]
 pub(crate) struct Ssl {
     pub(crate) ca_location: Option<String>,
     pub(crate) certificate_location: Option<String>,
@@ -29,7 +41,7 @@ pub(crate) struct Ssl {
 pub(crate) struct AppConfig {
     pub(crate) app: App,
     pub(crate) kafka: Kafka,
-    // pub(crate) fhir: Fhir,
+    pub(crate) fhir: Fhir,
 }
 
 impl AppConfig {
