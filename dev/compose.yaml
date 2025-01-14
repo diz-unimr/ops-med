@@ -45,7 +45,7 @@ services:
 
   fhir-data-loader:
     image: confluentinc/cp-kafkacat:7.1.12
-    entrypoint: [ "/bin/bash", "-c" ]
+    entrypoint: ["/bin/bash", "-c"]
     command: >
       "while true; do
         kafkacat -b kafka:19092 -K: -t test-fhir -P -l /data/person-data.ndjson &&
