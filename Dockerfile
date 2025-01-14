@@ -23,8 +23,8 @@ RUN addgroup -g $GID $GROUP && \
     --no-create-home --uid $UID --ingroup $GROUP $USER
 
 WORKDIR /app/
-COPY --from=build /app/target/release/ops-to-med ./
+COPY --from=build /app/target/release/ops-med ./
 COPY ./app.yaml ./
 USER $USER
 
-ENTRYPOINT ["/app/ops-to-med"]
+ENTRYPOINT ["/app/ops-med"]

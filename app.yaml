@@ -9,7 +9,7 @@ kafka:
     certificate_location: /app/cert/app_cert.pem
     key_location: /app/cert/app_key.pem
     key_password:
-  consumer_group: ops-to-med
+  consumer_group: ops-med
   input_topic: test-fhir
   output_topic: test-output
   offset_reset: earliest
