@@ -25,6 +25,7 @@ RUN addgroup -g $GID $GROUP && \
 WORKDIR /app/
 COPY --from=build /app/target/release/ops-med ./
 COPY ./app.yaml ./
+COPY ./resources ./
 USER $USER
 
 ENTRYPOINT ["/app/ops-med"]
