@@ -191,6 +191,7 @@ impl Mapper {
                 }
             })
             .filter_map(|ops_code| self.ops_mapping.get::<str>(ops_code.as_ref()))
+            .filter(|&m| self.med_mapping.contains_key::<str>(m.atc_code.as_ref()))
             .next()
     }
 
@@ -350,7 +351,7 @@ fn procedure_ref(identifiers: Vec<Option<Identifier>>) -> Option<Reference> {
     default_identifier(identifiers).map(|id| {
         Reference::builder()
             .reference(format!(
-                "identifier={}|{}",
+                "Procedure?identifier={}|{}",
                 id.system.clone().unwrap(),
                 id.value.clone().unwrap()
             ))

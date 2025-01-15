@@ -11,12 +11,12 @@ use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::{BorrowedMessage, Headers, Message};
 use rdkafka::producer::{FutureProducer, FutureRecord};
+use rdkafka::util::Timeout;
 use rdkafka::ClientConfig;
 use std::env;
 use std::error::Error;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Duration;
 
 async fn run(config: Kafka, topic: String, mapper: Mapper) {
     // create consumer
@@ -64,18 +64,17 @@ async fn run(config: Kafka, topic: String, mapper: Mapper) {
                     }
 
                     // mapper
-                    // TODO handle error
                     let Some(result) = mapper.map(payload.unwrap())
                         .map_err(|e| error!("Failed to map payload [key={key}]: {}",e))
                         .unwrap() else { return Ok(()); };
 
                     // send to output topic
-                    let produce_future = producer.send(
-                        FutureRecord::to(&output_topic)
-                            .key(key.deref())
-                            .payload(result.as_str()),
-                        Duration::from_secs(0),
-                    );
+                    let mut record = FutureRecord::to(&output_topic)
+                        .key(key.deref())
+                        .payload(result.as_str());
+                    record.timestamp=m.timestamp().to_millis();
+
+                    let produce_future = producer.send(record, Timeout::Never);
                     match produce_future.await {
                         Ok(delivery) => {
                             debug!("Message sent: key: {key}, partition: {}, offset: {}", delivery.0,delivery.1);
