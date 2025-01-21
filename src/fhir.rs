@@ -170,14 +170,14 @@ impl Mapper {
             )
             .build()?;
 
-        // create MedicationAdministration
-        let med_admin = self.build_medication_statement(
+        // MedicationStatement
+        let med_statement = self.build_medication_statement(
             procedure,
             ops_med,
             medication.id.clone().expect("medication missing id"),
         )?;
 
-        Ok((medication, med_admin))
+        Ok((medication, med_statement))
     }
 
     fn get_med_mapping(&self, codes: Option<CodeableConcept>) -> Option<&OpsMedication> {
@@ -365,6 +365,17 @@ fn build_dose(ops_med: &OpsMedication) -> Result<DosageDoseAndRate, Box<dyn Erro
 
     DosageDoseAndRate::builder()
         .dose(DosageDoseAndRateDose::Range(range))
+        .r#type(
+            CodeableConcept::builder()
+                .coding(vec![Some(
+                    Coding::builder()
+                        .system("http://terminology.hl7.org/CodeSystem/dose-rate-type".to_owned())
+                        .code("calculated".to_owned())
+                        .display("calculated".to_owned())
+                        .build()?,
+                )])
+                .build()?,
+        )
         .build()
         .map_err(|e| e.into())
 }
