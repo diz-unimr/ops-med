@@ -343,24 +343,10 @@ fn build_dose(ops_med: &OpsMedication) -> Result<DosageDoseAndRate, Box<dyn Erro
     let mut range = Range::builder().build()?;
 
     if let Some(unit_low) = &ops_med.einheit_min {
-        range.low = Some(
-            Quantity::builder()
-                .value(unit_low.trim().replace(',', ".").parse::<f64>()?)
-                .system("http://unitsofmeasure.org".to_owned())
-                .unit(ops_med.ucum_description.to_owned())
-                .code(ops_med.ucum_code.to_owned())
-                .build()?,
-        );
+        range.low = Some(ucum_quantity(unit_low, ops_med)?);
     }
     if let Some(unit_high) = &ops_med.einheit_max {
-        range.high = Some(
-            Quantity::builder()
-                .value(unit_high.trim().replace(',', ".").parse::<f64>()?)
-                .system("http://unitsofmeasure.org".to_owned())
-                .unit(ops_med.ucum_description.to_owned())
-                .code(ops_med.ucum_code.to_owned())
-                .build()?,
-        );
+        range.high = Some(ucum_quantity(unit_high, ops_med)?);
     }
 
     DosageDoseAndRate::builder()
@@ -376,6 +362,16 @@ fn build_dose(ops_med: &OpsMedication) -> Result<DosageDoseAndRate, Box<dyn Erro
                 )])
                 .build()?,
         )
+        .build()
+        .map_err(|e| e.into())
+}
+
+fn ucum_quantity(value: &String, med: &OpsMedication) -> Result<Quantity, Box<dyn Error>> {
+    Quantity::builder()
+        .value(value.trim().replace(',', ".").parse::<f64>()?)
+        .system("http://unitsofmeasure.org".to_owned())
+        .unit(med.ucum_description.to_owned())
+        .code(med.ucum_code.to_owned())
         .build()
         .map_err(|e| e.into())
 }
