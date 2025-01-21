@@ -106,8 +106,7 @@ async fn main() {
     env_logger::init();
 
     // mapper
-    // TODO handle error
-    let mapper = Mapper::new(config.clone()).unwrap();
+    let mapper = Mapper::new(config.clone()).expect("failed to create mapper");
 
     // run
     let topic = config.kafka.input_topic.clone();

@@ -18,6 +18,6 @@ fhir:
   medication:
     profile: https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/Medication
     system: https://miracum.org/fhir/NamingSystem/identifier/P21SurrogateMedicationId
-  medication_administration:
-    profile: https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/MedicationAdministration
-    system: https://fhir.diz.uni-marburg.de/sid/medication-administration-id
+  medication_statement:
+    profile: https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/MedicationStatement
+    system: https://fhir.diz.uni-marburg.de/sid/medication-statement-id

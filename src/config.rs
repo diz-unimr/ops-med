@@ -6,7 +6,7 @@ pub(crate) struct App {
     pub(crate) log_level: String,
 }
 
-#[derive(Default, Debug, Deserialize, Clone)]
+#[derive(Default, Deserialize, Clone)]
 pub(crate) struct Kafka {
     pub(crate) brokers: String,
     pub(crate) security_protocol: String,
@@ -17,10 +17,10 @@ pub(crate) struct Kafka {
     pub(crate) offset_reset: String,
 }
 
-#[derive(Default, Debug, Deserialize, Clone)]
+#[derive(Default, Deserialize, Clone)]
 pub(crate) struct Fhir {
     pub(crate) medication: ResourceConfig,
-    pub(crate) medication_administration: ResourceConfig,
+    pub(crate) medication_statement: ResourceConfig,
 }
 
 #[derive(Default, Debug, Deserialize, Clone)]
@@ -37,7 +37,7 @@ pub(crate) struct Ssl {
     pub(crate) key_password: Option<String>,
 }
 
-#[derive(Default, Debug, Deserialize, Clone)]
+#[derive(Default, Deserialize, Clone)]
 pub(crate) struct AppConfig {
     pub(crate) app: App,
     pub(crate) kafka: Kafka,

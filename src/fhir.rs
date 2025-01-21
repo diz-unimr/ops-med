@@ -2,12 +2,14 @@ use crate::config::{AppConfig, Fhir};
 use fhir_sdk::r4b::codes::{BundleType, HTTPVerb, IdentifierUse};
 use fhir_sdk::r4b::resources::{
     Bundle, BundleEntry, BundleEntryRequest, IdentifiableResource, Medication,
-    MedicationAdministration, MedicationAdministrationDosage, MedicationAdministrationEffective,
-    MedicationAdministrationMedication, MedicationIngredient, MedicationIngredientItem, Procedure,
-    ProcedurePerformed, Resource, ResourceType,
+    MedicationIngredient, MedicationIngredientItem, MedicationStatement,
+    MedicationStatementEffective, MedicationStatementMedication, Procedure, ProcedurePerformed,
+    Resource, ResourceType,
 };
-use fhir_sdk::r4b::types::{CodeableConcept, Coding, Identifier, Meta, Reference};
-use fhir_sdk::BuilderError;
+use fhir_sdk::r4b::types::{
+    CodeableConcept, Coding, Dosage, DosageDoseAndRate, DosageDoseAndRateDose, Identifier, Meta,
+    Quantity, Range, Reference,
+};
 use serde::de::DeserializeOwned;
 use serde_derive::Deserialize;
 use std::collections::HashMap;
@@ -16,7 +18,7 @@ use std::error::Error;
 use std::fs::File;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Mapper {
     pub(crate) config: Fhir,
     pub(crate) ops_mapping: HashMap<String, OpsMedication>,
@@ -28,7 +30,7 @@ impl Mapper {
         // deserialize
         let b: Bundle = serde_json::from_str(bundle.as_str())?;
 
-        // map Procedure to MedicationAdministration / Medication
+        // map Procedure to MedicationStatement / Medication
         let ops_med: Vec<Option<BundleEntry>> = self
             .get_procedures(b)
             .iter()
@@ -66,28 +68,28 @@ impl Mapper {
             .collect()
     }
 
-    fn build_medication_administration(
+    fn build_medication_statement(
         &self,
         procedure: &Procedure,
         record: &OpsMedication,
         medication_id: String,
-    ) -> Result<MedicationAdministration, Box<dyn Error>> {
+    ) -> Result<MedicationStatement, Box<dyn Error>> {
         let procedure_id = default_identifier(procedure.identifier.clone())
             .ok_or("no default identifier")?
             .value
             .clone()
             .ok_or("missing value for default identifier")?;
-        MedicationAdministration::builder()
+        MedicationStatement::builder()
             // set required properties
             .id(procedure_id.clone())
             .meta(build_meta(
-                self.config.medication_administration.profile.to_owned(),
+                self.config.medication_statement.profile.to_owned(),
                 procedure,
             ))
             .identifier(vec![Some(
                 Identifier::builder()
                     .r#use(IdentifierUse::Usual)
-                    .system(self.config.medication_administration.system.to_owned())
+                    .system(self.config.medication_statement.system.to_owned())
                     .value(procedure_id.clone())
                     .build()
                     .unwrap(),
@@ -104,8 +106,8 @@ impl Mapper {
                     .clone()
                     .ok_or("procedure.perfomed is empty")?,
             )?)
-            .dosage(build_dosage(record)?)
-            .medication(MedicationAdministrationMedication::Reference(
+            .dosage(vec![Some(build_dosage(record)?)])
+            .medication(MedicationStatementMedication::Reference(
                 Reference::builder()
                     .reference(conditional_reference(
                         ResourceType::Medication,
@@ -128,7 +130,7 @@ impl Mapper {
         &self,
         procedure: &Procedure,
         ops_med: &OpsMedication,
-    ) -> Result<(Medication, MedicationAdministration), Box<dyn Error>> {
+    ) -> Result<(Medication, MedicationStatement), Box<dyn Error>> {
         // build medication
         let medication_id = build_legacy_id(ops_med.substanzangabe_aus_ops_code.to_owned());
         let medication = Medication::builder()
@@ -169,7 +171,7 @@ impl Mapper {
             .build()?;
 
         // create MedicationAdministration
-        let med_admin = self.build_medication_administration(
+        let med_admin = self.build_medication_statement(
             procedure,
             ops_med,
             medication.id.clone().expect("medication missing id"),
@@ -242,7 +244,7 @@ impl Mapper {
 }
 
 fn to_bundle_entry(
-    medication: Result<(Medication, MedicationAdministration), Box<dyn Error>>,
+    medication: Result<(Medication, MedicationStatement), Box<dyn Error>>,
 ) -> Result<Vec<Option<BundleEntry>>, Box<dyn Error>> {
     match medication {
         Ok(med) => Ok(vec![
@@ -305,11 +307,10 @@ fn conditional_reference(resource_type: ResourceType, system: String, value: Str
     format!("{resource_type}?identifier={system}|{value}")
 }
 
-fn build_dosage(record: &OpsMedication) -> Result<MedicationAdministrationDosage, BuilderError> {
-    MedicationAdministrationDosage::builder()
+fn build_dosage(record: &OpsMedication) -> Result<Dosage, Box<dyn Error>> {
+    Dosage::builder()
         .text(record.text.clone())
-        // TODO exact dose is unknown as OPS codes represent a range
-        // .dose(build_dose(record)?)
+        .dose_and_rate(vec![Some(build_dose(record)?)])
         // TODO needs SNOMED mapping
         // .site(...)
         .route(
@@ -335,14 +336,45 @@ fn build_dosage(record: &OpsMedication) -> Result<MedicationAdministrationDosage
                 .build()?,
         )
         .build()
+        .map_err(|e| e.into())
+}
+
+fn build_dose(ops_med: &OpsMedication) -> Result<DosageDoseAndRate, Box<dyn Error>> {
+    let mut range = Range::builder().build()?;
+
+    if let Some(unit_low) = &ops_med.einheit_min {
+        range.low = Some(
+            Quantity::builder()
+                .value(unit_low.trim().replace(',', ".").parse::<f64>()?)
+                .system("http://unitsofmeasure.org".to_owned())
+                .unit(ops_med.ucum_description.to_owned())
+                .code(ops_med.ucum_code.to_owned())
+                .build()?,
+        );
+    }
+    if let Some(unit_high) = &ops_med.einheit_max {
+        range.high = Some(
+            Quantity::builder()
+                .value(unit_high.trim().replace(',', ".").parse::<f64>()?)
+                .system("http://unitsofmeasure.org".to_owned())
+                .unit(ops_med.ucum_description.to_owned())
+                .code(ops_med.ucum_code.to_owned())
+                .build()?,
+        );
+    }
+
+    DosageDoseAndRate::builder()
+        .dose(DosageDoseAndRateDose::Range(range))
+        .build()
+        .map_err(|e| e.into())
 }
 
 fn build_effective(
     performed: ProcedurePerformed,
-) -> Result<MedicationAdministrationEffective, Box<dyn Error>> {
+) -> Result<MedicationStatementEffective, Box<dyn Error>> {
     match performed {
-        ProcedurePerformed::DateTime(dt) => Ok(MedicationAdministrationEffective::DateTime(dt)),
-        ProcedurePerformed::Period(p) => Ok(MedicationAdministrationEffective::Period(p)),
+        ProcedurePerformed::DateTime(dt) => Ok(MedicationStatementEffective::DateTime(dt)),
+        ProcedurePerformed::Period(p) => Ok(MedicationStatementEffective::Period(p)),
         _ => Err("Procedure.performed must be DateTime or Period".into()),
     }
 }
@@ -406,6 +438,14 @@ pub(crate) struct OpsMedication {
     method_code: String,
     #[serde(rename = "Administration Method - Name")]
     method_name: String,
+    #[serde(rename = "Einheit_Wert_min")]
+    einheit_min: Option<String>,
+    #[serde(rename = "Einheit_Wert_max")]
+    einheit_max: Option<String>,
+    #[serde(rename = "UCUM-Description")]
+    ucum_description: String,
+    #[serde(rename = "UCUM-Code")]
+    ucum_code: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
