@@ -66,7 +66,10 @@ async fn run(config: Kafka, topic: String, mapper: Mapper) {
                     // mapper
                     let Some(result) = mapper.map(payload.unwrap())
                         .map_err(|e| error!("Failed to map payload [key={key}]: {}",e))
-                        .unwrap() else { return Ok(()); };
+                        .unwrap() else {
+                        commit_offset(&*consumer,&m);
+                        return Ok(());
+                    };
 
                     // send to output topic
                     let mut record = FutureRecord::to(&output_topic)
@@ -79,9 +82,7 @@ async fn run(config: Kafka, topic: String, mapper: Mapper) {
                         Ok(delivery) => {
                             debug!("Message sent: key: {key}, partition: {}, offset: {}", delivery.0,delivery.1);
                             // store offset
-                            consumer
-                                .store_offset_from_message(&m)
-                                .expect("Failed to store offset for message");
+                            commit_offset(&*consumer, &m);
                         }
                         Err((e, _)) => println!("Error: {:?}", e),
                     }
@@ -94,6 +95,12 @@ async fn run(config: Kafka, topic: String, mapper: Mapper) {
     info!("Starting consumer");
     let error = stream.await;
     info!("Consumers terminated: {:?}", error);
+}
+
+fn commit_offset(consumer: &StreamConsumer, message: &BorrowedMessage) {
+    consumer
+        .store_offset_from_message(&message)
+        .expect("Failed to store offset for message");
 }
 
 #[tokio::main]
