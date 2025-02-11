@@ -261,7 +261,9 @@ fn build_legacy_id(input: String) -> String {
     format!("id-{:x}", hash.to_be())
 }
 
-fn bundle_entry<T: IdentifiableResource + Clone>(resource: T) -> Result<BundleEntry, Box<dyn Error>>
+pub(crate) fn bundle_entry<T: IdentifiableResource + Clone>(
+    resource: T,
+) -> Result<BundleEntry, Box<dyn Error>>
 where
     Resource: From<T>,
 {

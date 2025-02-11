@@ -18,12 +18,15 @@ use std::error::Error;
 use std::ops::Deref;
 use std::sync::Arc;
 
-async fn run(config: Kafka, topic: String, mapper: Mapper) {
+async fn run(config: Kafka, mapper: Mapper) {
     // create consumer
     let consumer: StreamConsumer = create_consumer(config.clone());
     match consumer.subscribe(&[&config.input_topic]) {
         Ok(_) => {
-            info!("Successfully subscribed to topic: {:?}", topic);
+            info!(
+                "Successfully subscribed to topic: {:?}",
+                &config.input_topic
+            );
         }
         Err(error) => error!("Failed to subscribe to specified topic: {}", error),
     }
@@ -65,8 +68,8 @@ async fn run(config: Kafka, topic: String, mapper: Mapper) {
 
                     // mapper
                     let Some(result) = mapper.map(payload.unwrap())
-                        .map_err(|e| error!("Failed to map payload [key={key}]: {}",e))
-                        .unwrap() else {
+                        .expect(&format!("Failed to map payload with [key={key}]"))
+                    else {
                         commit_offset(&*consumer,&m);
                         return Ok(());
                     };
@@ -116,10 +119,9 @@ async fn main() {
     let mapper = Mapper::new(config.clone()).expect("failed to create mapper");
 
     // run
-    let topic = config.kafka.input_topic.clone();
     let num_partitions = 3;
     (0..num_partitions)
-        .map(|_| tokio::spawn(run(config.kafka.clone(), topic.clone(), mapper.clone())))
+        .map(|_| tokio::spawn(run(config.kafka.clone(), mapper.clone())))
         .collect::<FuturesUnordered<_>>()
         .for_each(|_| async { () })
         .await
@@ -197,46 +199,102 @@ fn deserialize_message(m: &BorrowedMessage) -> (String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use crate::config::AppConfig;
+    use crate::fhir::Mapper;
+    use crate::{deserialize_message, run};
+    use fhir_sdk::r4b::resources::{Bundle, ResourceType};
+    use rdkafka::consumer::{Consumer, StreamConsumer};
     use rdkafka::mocking::MockCluster;
     use rdkafka::producer::future_producer::OwnedDeliveryResult;
     use rdkafka::producer::{FutureProducer, FutureRecord};
+    use serde_json::Value;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[tokio::test]
     async fn test_run() {
-        const TOPIC: &str = "test_topic";
+        let _r = env_logger::try_init();
+        const INPUT_TOPIC: &str = "input_topic";
+        const OUTPUT_TOPIC: &str = "output_topic";
 
         // create mock cluster
-        let mock_cluster = MockCluster::new(3).unwrap();
+        let mock_cluster = MockCluster::new(1).unwrap();
         mock_cluster
-            .create_topic(TOPIC, 3, 3)
-            .expect("Failed to create topic");
+            .create_topic(INPUT_TOPIC, 1, 1)
+            .expect("Failed to create input topic");
+        mock_cluster
+            .create_topic(OUTPUT_TOPIC, 1, 1)
+            .expect("Failed to create output topic");
 
-        let mock_producer: FutureProducer = rdkafka::ClientConfig::new()
+        let test_producer: FutureProducer = rdkafka::ClientConfig::new()
             .set("bootstrap.servers", mock_cluster.bootstrap_servers())
             .create()
-            .expect("Producer creation error");
+            .expect("Producer creation failed");
 
-        send_record(mock_producer.clone(), TOPIC, "test")
+        let output_consumer: StreamConsumer = rdkafka::ClientConfig::new()
+            .set("bootstrap.servers", mock_cluster.bootstrap_servers())
+            .set("group.id", "test-consumer")
+            .create()
+            .expect("Consumer creation failed");
+        output_consumer.subscribe(&[OUTPUT_TOPIC]).unwrap();
+
+        // input data
+        let bundle_str = r#"{
+          "resourceType": "Bundle",
+          "type": "transaction",
+          "entry": [
+            {
+              "resource": {
+                "resourceType": "Procedure",
+                "identifier": [
+                  { "use": "usual", "system": "proc-system", "value": "proc-id" }
+                ],
+                "code":{"coding":[{"system":"http://fhir.de/CodeSystem/bfarm/ops","code":"6-002.11"}]},
+                "status": "completed",
+                "subject": { "reference": "Patient/42" },
+                "performedDateTime": "2023-02-12T10:03:00+01:00"
+              },
+              "request": {
+                "method": "PUT",
+                "url": "Procedure?identifier=proc-system|proc-id"
+              }
+            }
+          ]
+        }"#;
+
+        let _res = send_record(test_producer.clone(), INPUT_TOPIC, bundle_str)
             .await
             .unwrap();
-        send_record(mock_producer.clone(), TOPIC, "done")
-            .await
-            .unwrap();
 
-        // setup configsubstanzangabe_aus_ops_code
+        // setup config
         let mut config = AppConfig::default();
         config.kafka.brokers = mock_cluster.bootstrap_servers();
         config.kafka.offset_reset = String::from("earliest");
         config.kafka.security_protocol = String::from("plaintext");
         config.kafka.consumer_group = String::from("test");
+        config.kafka.input_topic = INPUT_TOPIC.to_owned();
+        config.kafka.output_topic = OUTPUT_TOPIC.to_owned();
 
-        // TODO rewrite
-        // run(config, TOPIC.to_string()).await;
+        // mapper
+        let mapper = Mapper::new(config.clone()).expect("failed to create mapper");
 
-        // mock was called once
-        // post_mock.assert();
-        // done.assert();
+        // run processor
+        tokio::spawn(async move {
+            run(config.kafka, mapper).await;
+        });
+
+        // get message from output topic
+        let m = output_consumer.recv().await.unwrap();
+        let (_, payload) = deserialize_message(&m);
+        let raw: Value =
+            serde_json::from_str(&*payload.expect("failed to read output message")).unwrap();
+        let b: Bundle = serde_json::from_value(raw).unwrap();
+
+        // assert medication resources
+        assert_eq!(b.entry.len(), 2);
+        assert!(b
+            .entry
+            .iter()
+            .map(|e| e.clone().unwrap().resource.unwrap().resource_type())
+            .all(|t| t == ResourceType::Medication || t == ResourceType::MedicationStatement));
     }
 
     async fn send_record(
