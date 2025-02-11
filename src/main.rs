@@ -201,7 +201,7 @@ mod tests {
     use crate::config::AppConfig;
     use crate::fhir::Mapper;
     use crate::{deserialize_message, run};
-    use fhir_sdk::r4b::resources::{Bundle, ResourceType};
+    use fhir_model::r4b::resources::{Bundle, ResourceType};
     use rdkafka::consumer::{Consumer, StreamConsumer};
     use rdkafka::mocking::MockCluster;
     use rdkafka::producer::future_producer::OwnedDeliveryResult;

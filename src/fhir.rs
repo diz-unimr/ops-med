@@ -1,12 +1,12 @@
 use crate::config::{AppConfig, Fhir};
-use fhir_sdk::r4b::codes::{BundleType, HTTPVerb, IdentifierUse};
-use fhir_sdk::r4b::resources::{
+use fhir_model::r4b::codes::{BundleType, HTTPVerb, IdentifierUse};
+use fhir_model::r4b::resources::{
     Bundle, BundleEntry, BundleEntryRequest, IdentifiableResource, Medication,
     MedicationIngredient, MedicationIngredientItem, MedicationStatement,
     MedicationStatementEffective, MedicationStatementMedication, Procedure, ProcedurePerformed,
     Resource, ResourceType,
 };
-use fhir_sdk::r4b::types::{
+use fhir_model::r4b::types::{
     CodeableConcept, Coding, Dosage, DosageDoseAndRate, DosageDoseAndRateDose, Identifier, Meta,
     Quantity, Range, Reference,
 };
