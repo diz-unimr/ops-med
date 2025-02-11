@@ -1,4 +1,4 @@
-💊 ops-med
+# 💊 ops-med
 
 [![MegaLinter](https://github.com/diz-unimr/ops-med/actions/workflows/mega-linter.yml/badge.svg)](https://github.com/diz-unimr/ops-med/actions/workflows/mega-linter.yml)
 [![build](https://github.com/diz-unimr/ops-med/actions/workflows/build.yaml/badge.svg)](https://github.com/diz-unimr/ops-med/actions/workflows/build.yaml)
@@ -25,23 +25,23 @@ resource.
 
 Application properties are read from a properties file ([app.yaml](./app.yaml)) with default values.
 
-| Name                                | Default                                                                                                        | Description                                   |
-|-------------------------------------|----------------------------------------------------------------------------------------------------------------|-----------------------------------------------|
-| `app.log_level`                     | info                                                                                                           | Log level (error,warn,info,debug,trace)       |
-| `kafka.brokers`                     | localhost:9092                                                                                                 | Kafka brokers                                 |
-| `kafka.security_protocol`           | plaintext                                                                                                      | Kafka communication protocol                  |
-| `kafka.ssl.ca_location`             | /app/cert/kafka_ca.pem                                                                                         | Kafka CA certificate location                 |
-| `kafka.ssl.certificate_location`    | /app/cert/app_cert.pem                                                                                         | Client certificate location                   |
-| `kafka.ssl.key_location`            | /app/cert/app_key.pem                                                                                          | Client key location                           |
-| `kafka.ssl.key_password`            |                                                                                                                | Client key password                           |
-| `kafka.consumer_group`              | ops-med                                                                                                        | Consumer group name                           |
-| `kafka.input_topic`                 | test-fhir                                                                                                      | Kafka topic to consume                        |
-| `kafka.output_topic`                | test-output                                                                                                    | Kafka output topic                            |
-| `kafka.offset_reset`                | earliest                                                                                                       | Kafka consumer reset (`earliest` or `latest`) |
-| `fhir.medication.profile`           | https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/Medication          | `Medication` FHIR profile                     |
-| `fhir.medication.system`            | https://fhir.diz.uni-marburg.de/sid/medication-id                                                              | `Medication` identifier system                |
-| `fhir.medication_statement.profile` | https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/MedicationStatement | `MedicationStatement` FHIR profile            |
-| `fhir.medication_statement.system`  | https://fhir.diz.uni-marburg.de/sid/medication-statement-id                                                    | `MedicationStatement` identifier system       |
+| Name                                | Default                                                                                                          | Description                                   |
+|-------------------------------------|------------------------------------------------------------------------------------------------------------------|-----------------------------------------------|
+| `app.log_level`                     | info                                                                                                             | Log level (error,warn,info,debug,trace)       |
+| `kafka.brokers`                     | localhost:9092                                                                                                   | Kafka brokers                                 |
+| `kafka.security_protocol`           | plaintext                                                                                                        | Kafka communication protocol                  |
+| `kafka.ssl.ca_location`             | /app/cert/kafka_ca.pem                                                                                           | Kafka CA certificate location                 |
+| `kafka.ssl.certificate_location`    | /app/cert/app_cert.pem                                                                                           | Client certificate location                   |
+| `kafka.ssl.key_location`            | /app/cert/app_key.pem                                                                                            | Client key location                           |
+| `kafka.ssl.key_password`            |                                                                                                                  | Client key password                           |
+| `kafka.consumer_group`              | ops-med                                                                                                          | Consumer group name                           |
+| `kafka.input_topic`                 | test-fhir                                                                                                        | Kafka topic to consume                        |
+| `kafka.output_topic`                | test-output                                                                                                      | Kafka output topic                            |
+| `kafka.offset_reset`                | earliest                                                                                                         | Kafka consumer reset (`earliest` or `latest`) |
+| `fhir.medication.profile`           | `https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/Medication`          | `Medication` FHIR profile                     |
+| `fhir.medication.system`            | `https://fhir.diz.uni-marburg.de/sid/medication-id`                                                              | `Medication` identifier system                |
+| `fhir.medication_statement.profile` | `https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/MedicationStatement` | `MedicationStatement` FHIR profile            |
+| `fhir.medication_statement.system`  | `https://fhir.diz.uni-marburg.de/sid/medication-statement-id`                                                    | `MedicationStatement` identifier system       |
 
 ### Environment variables
 
